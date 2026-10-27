@@ -25,13 +25,10 @@
     </div>
     <script>
       var canvas = document.querySelector("#unity-canvas");
+      var loadingBar = document.querySelector("#unity-loading-bar");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var fullscreenButton = document.querySelector("#unity-fullscreen-button");
 
-      // Shows a temporary message banner/ribbon for a few seconds, or
-      // a permanent error message on top of the canvas if type=='error'.
-      // If type=='warning', a yellow highlight color is used.
-      // Modify or remove this function to customize the visually presented
-      // way that non-critical warnings and error messages are presented to the
-      // user.
       function unityShowBanner(msg, type) {
         var warningBanner = document.querySelector("#unity-warning");
         function updateBannerVisibility() {
@@ -65,62 +62,36 @@
         showBanner: unityShowBanner,
       };
 
-      // By default, Unity keeps WebGL canvas render target size matched with
-      // the DOM size of the canvas element (scaled by window.devicePixelRatio)
-      // Set this to false if you want to decouple this synchronization from
-      // happening inside the engine, and you would instead like to size up
-      // the canvas DOM size and WebGL render target sizes yourself.
-      // config.matchWebGLToCanvasSize = false;
-
-      // If you would like all file writes inside Unity Application.persistentDataPath
-      // directory to automatically persist so that the contents are remembered when
-      // the user revisits the site the next time, uncomment the following line:
-      // config.autoSyncPersistentDataPath = true;
-      // This autosyncing is currently not the default behavior to avoid regressing
-      // existing user projects that might rely on the earlier manual
-      // JS_FileSystem_Sync() behavior, but in future Unity version, this will be
-      // expected to change.
-
       if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-        // Mobile device style: fill the whole browser client area with the game canvas:
-
         var meta = document.createElement('meta');
         meta.name = 'viewport';
         meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
         document.getElementsByTagName('head')[0].appendChild(meta);
         document.querySelector("#unity-container").className = "unity-mobile";
         canvas.className = "unity-mobile";
-
-        // To lower canvas resolution on mobile devices to gain some
-        // performance, uncomment the following line:
-        // config.devicePixelRatio = 1;
-
-
       } else {
-        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
         canvas.style.width = "960px";
         canvas.style.height = "600px";
       }
 
-      document.querySelector("#unity-loading-bar").style.display = "block";
+      loadingBar.style.display = "block";
 
-      var script = document.createElement("script");
-      script.src = loaderUrl;
+      // Downloads chunks sequentially to avoid ERR_HTTP2_FLOW_CONTROL_ERROR
       async function fetchAndMergeDataParts(partUrls, onProgress) {
-        let loadedParts = 0;
-        const buffers = await Promise.all(
-          partUrls.map(async (url) => {
-            const response = await fetch(url);
-            if (!response.ok) {
-              throw new Error("Failed to download data chunk: " + url);
-            }
-            const buffer = await response.arrayBuffer();
-            loadedParts++;
-            if (onProgress) onProgress(loadedParts / partUrls.length);
-            return buffer;
-          })
-        );
-        const mergedBlob = new Blob(buffers, { type: "application/octet-stream" });
+        const blobs = [];
+        for (let i = 0; i < partUrls.length; i++) {
+          const url = partUrls[i];
+          const response = await fetch(url, { cache: "default" });
+          if (!response.ok) {
+            throw new Error("Failed to download data chunk: " + url + " (Status: " + response.status + ")");
+          }
+          const chunkBlob = await response.blob();
+          blobs.push(chunkBlob);
+          if (onProgress) {
+            onProgress((i + 1) / partUrls.length);
+          }
+        }
+        const mergedBlob = new Blob(blobs, { type: "application/octet-stream" });
         return URL.createObjectURL(mergedBlob);
       }
 
@@ -128,7 +99,7 @@
       script.src = loaderUrl;
       script.onload = async () => {
         try {
-          // 1. Download and merge the 3 chunks (fills loading bar from 0% to 50%)
+          // 1. Download and merge the 3 chunks sequentially (0% to 50% progress)
           const mergedDataUrl = await fetchAndMergeDataParts(
             [
               buildUrl + "/port.data.part_aa",
@@ -136,14 +107,14 @@
               buildUrl + "/port.data.part_ac",
             ],
             (chunkProgress) => {
-              progressBarFull.style.width = 50 * chunkProgress + "%";
+              progressBarFull.style.width = (50 * chunkProgress) + "%";
             }
           );
 
           // 2. Point Unity's config to the merged in-memory file
           config.dataUrl = mergedDataUrl;
 
-          // 3. Boot Unity (fills loading bar from 50% to 100%)
+          // 3. Boot Unity (50% to 100% progress)
           const unityInstance = await createUnityInstance(canvas, config, (progress) => {
             progressBarFull.style.width = (50 + 50 * progress) + "%";
           });
@@ -151,7 +122,7 @@
           // 4. Clean up temporary Blob URL and hide loading bar
           URL.revokeObjectURL(mergedDataUrl);
           loadingBar.style.display = "none";
-          if (typeof fullscreenButton !== "undefined" && fullscreenButton) {
+          if (fullscreenButton) {
             fullscreenButton.onclick = () => {
               unityInstance.SetFullscreen(1);
             };
@@ -162,7 +133,6 @@
       };
 
       document.body.appendChild(script);
-
     </script>
   </body>
 </html>
