@@ -55,9 +55,9 @@
       var loaderUrl = buildUrl + "/port.loader.js";
       var config = {
         arguments: [],
-        dataUrl: buildUrl + "/port.data",
-        frameworkUrl: buildUrl + "/port.framework.js",
-        codeUrl: buildUrl + "/port.wasm",
+        dataUrl: buildUrl + "/port.data.unityweb",
+        frameworkUrl: buildUrl + "/port.framework.js.unityweb",
+        codeUrl: buildUrl + "/port.wasm.unityweb",
         streamingAssetsUrl: "StreamingAssets",
         companyName: "Axom",
         productName: "off Grid",
@@ -106,19 +106,60 @@
 
       var script = document.createElement("script");
       script.src = loaderUrl;
-      script.onload = () => {
-        createUnityInstance(canvas, config, (progress) => {
-          document.querySelector("#unity-progress-bar-full").style.width = 100 * progress + "%";
-              }).then((unityInstance) => {
-                document.querySelector("#unity-loading-bar").style.display = "none";
-                document.querySelector("#unity-fullscreen-button").onclick = () => {
-                  unityInstance.SetFullscreen(1);
-                };
+      async function fetchAndMergeDataParts(partUrls, onProgress) {
+        let loadedParts = 0;
+        const buffers = await Promise.all(
+          partUrls.map(async (url) => {
+            const response = await fetch(url);
+            if (!response.ok) {
+              throw new Error("Failed to download data chunk: " + url);
+            }
+            const buffer = await response.arrayBuffer();
+            loadedParts++;
+            if (onProgress) onProgress(loadedParts / partUrls.length);
+            return buffer;
+          })
+        );
+        const mergedBlob = new Blob(buffers, { type: "application/octet-stream" });
+        return URL.createObjectURL(mergedBlob);
+      }
 
-              }).catch((message) => {
-                alert(message);
-              });
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = async () => {
+        try {
+          // 1. Download and merge the 3 chunks (fills loading bar from 0% to 50%)
+          const mergedDataUrl = await fetchAndMergeDataParts(
+            [
+              buildUrl + "/port.data.part_aa",
+              buildUrl + "/port.data.part_ab",
+              buildUrl + "/port.data.part_ac",
+            ],
+            (chunkProgress) => {
+              progressBarFull.style.width = 50 * chunkProgress + "%";
+            }
+          );
+
+          // 2. Point Unity's config to the merged in-memory file
+          config.dataUrl = mergedDataUrl;
+
+          // 3. Boot Unity (fills loading bar from 50% to 100%)
+          const unityInstance = await createUnityInstance(canvas, config, (progress) => {
+            progressBarFull.style.width = (50 + 50 * progress) + "%";
+          });
+
+          // 4. Clean up temporary Blob URL and hide loading bar
+          URL.revokeObjectURL(mergedDataUrl);
+          loadingBar.style.display = "none";
+          if (typeof fullscreenButton !== "undefined" && fullscreenButton) {
+            fullscreenButton.onclick = () => {
+              unityInstance.SetFullscreen(1);
             };
+          }
+        } catch (message) {
+          alert(message);
+        }
+      };
 
       document.body.appendChild(script);
 
